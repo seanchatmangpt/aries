@@ -1,0 +1,85 @@
+name: ARIES Ash PaaS
+
+on:
+  pull_request:
+    paths:
+      - "paas/**"
+      - ".github/workflows/aries-paas.yml"
+  push:
+    branches: [master]
+    paths:
+      - "paas/**"
+      - ".github/workflows/aries-paas.yml"
+
+concurrency:
+  group: aries-paas-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  paas-crown:
+    name: ontology -> Ash -> Reactor -> ARIES -> receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact ARIES candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install current stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build preserved ARIES planner actuator
+        run: cargo build -p aries_planners --bin aries-plan
+
+      - name: Checkout pinned ggen manufacturer
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: seanchatmangpt/ggen
+          ref: 1e9fcb9679a61460fbd641415cb72511c7e50b33
+          path: .tooling/ggen
+
+      - name: Build real ggen actuator
+        working-directory: .tooling/ggen
+        run: cargo build -p ggen-cli-lib --bin ggen
+
+      - name: Set up AshR2RML-compatible BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.2.4"
+
+      - name: Manufacture public-ontology projection twice
+        working-directory: paas
+        run: |
+          set -euo pipefail
+          ../.tooling/ggen/target/debug/ggen sync run
+          first="$(sha256sum lib/aries_paas/generated/capability_catalog.ex | cut -d' ' -f1)"
+          ../.tooling/ggen/target/debug/ggen sync run
+          second="$(sha256sum lib/aries_paas/generated/capability_catalog.ex | cut -d' ' -f1)"
+          test "$first" = "$second"
+          ../.tooling/ggen/target/debug/ggen receipt verify
+
+      - name: Resolve PaaS dependencies
+        working-directory: paas
+        run: mix deps.get
+
+      - name: Compile PaaS with warnings as errors
+        working-directory: paas
+        run: mix compile --force --warnings-as-errors
+
+      - name: Execute exact ARIES PaaS crown
+        working-directory: paas
+        run: mix test --trace
+
+      - name: Publish receipt DAG
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aries-paas-receipts-${{ github.sha }}
+          path: |
+            paas/tmp/aries_paas_receipt.json
+            paas/.ggen/receipts/**
+          if-no-files-found: warn

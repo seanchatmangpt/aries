@@ -1,0 +1,42 @@
+@prefix aries: <https://github.com/seanchatmangpt/aries/paas/capability/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix odrl: <http://www.w3.org/ns/odrl/2/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix time: <http://www.w3.org/2006/time#> .
+@prefix qudt: <http://qudt.org/schema/qudt/> .
+@prefix p-plan: <http://purl.org/net/p-plan#> .
+
+aries:semantic-admission
+    a skos:Concept ;
+    dcterms:identifier "semantic_admission" ;
+    skos:prefLabel "Semantic admission" ;
+    dcterms:type "SELECT" ;
+    dcterms:description "Compile and verify the admitted Ash resource closure through AshR2RML before solver execution." ;
+    dcterms:conformsTo sh:NodeShape, rr:TriplesMap, prov:Entity, p-plan:Plan .
+
+aries:authorize
+    a skos:Concept ;
+    dcterms:identifier "authorize" ;
+    skos:prefLabel "Explicit execute authority" ;
+    dcterms:type "SELECT" ;
+    dcterms:description "Refuse ARIES actuation unless the request carries explicit execute authority; no model, hook, or semantic graph receives ambient DO authority." ;
+    dcterms:conformsTo odrl:Policy .
+
+aries:solve
+    a skos:Concept ;
+    dcterms:identifier "solve" ;
+    skos:prefLabel "ARIES solver actuation" ;
+    dcterms:type "DO" ;
+    dcterms:description "Invoke the preserved ARIES aries-plan kernel against admitted PDDL/HDDL inputs without reimplementing planning algorithms in Elixir." ;
+    dcterms:conformsTo p-plan:Plan, prov:Activity, time:Interval .
+
+aries:verify-receipt
+    a skos:Concept ;
+    dcterms:identifier "verify_receipt" ;
+    skos:prefLabel "Receipt verification" ;
+    dcterms:type "RECEIPT" ;
+    dcterms:description "Bind source identities, command identity, solver consequence, semantic mapping identity, and execution standing into a verified receipt." ;
+    dcterms:conformsTo prov:Bundle, qudt:QuantityValue .

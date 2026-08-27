@@ -1,0 +1,37 @@
+[project]
+name = "aries-paas"
+version = "26.8.26"
+description = "Deterministic public-ontology capability projection for the ARIES Ash/Reactor PaaS"
+
+[ontology]
+source = "ontology/public-capabilities.ttl"
+base_iri = "https://github.com/seanchatmangpt/aries/paas/capability/"
+
+[ontology.prefixes]
+aries = "https://github.com/seanchatmangpt/aries/paas/capability/"
+skos = "http://www.w3.org/2004/02/skos/core#"
+dcterms = "http://purl.org/dc/terms/"
+
+[inference]
+
+[generation]
+output_dir = "."
+
+[[generation.rules]]
+name = "aries-paas-capability-catalog"
+query = { inline = """
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+SELECT ?id ?label ?phase ?description
+WHERE {
+  ?capability a skos:Concept ;
+              dcterms:identifier ?id ;
+              skos:prefLabel ?label ;
+              dcterms:type ?phase ;
+              dcterms:description ?description .
+}
+ORDER BY ?id
+""" }
+template = { file = "templates/capability_catalog.ex.tera" }
+output_file = "lib/aries_paas/generated/capability_catalog.ex"
+mode = "Overwrite"
