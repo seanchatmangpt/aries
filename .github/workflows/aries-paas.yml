@@ -1,0 +1,130 @@
+name: ARIES Ash PaaS
+
+on:
+  pull_request:
+    paths:
+      - "paas/**"
+      - ".github/workflows/aries-paas.yml"
+  push:
+    branches: [master]
+    paths:
+      - "paas/**"
+      - ".github/workflows/aries-paas.yml"
+
+concurrency:
+  group: aries-paas-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  paas-crown:
+    name: ontology -> Ash -> Reactor -> ARIES -> receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact ARIES candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install ARIES Rust toolchain
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b
+        with:
+          toolchain: "1.96"
+
+      - name: Build preserved ARIES planner actuator
+        run: cargo build -p aries_planners --bin aries-plan
+
+      - name: Checkout pinned ggen manufacturer
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: seanchatmangpt/ggen
+          ref: 1e9fcb9679a61460fbd641415cb72511c7e50b33
+          path: .tooling/ggen
+
+      # ggen's workspace intentionally path-patches these four siblings. These
+      # are the exact identities used by ggen's own setup-ggen-build action at
+      # the pinned ggen source commit; nested checkout means they must live next
+      # to .tooling/ggen rather than next to the ARIES workspace root.
+      - name: Checkout pinned lsp-max dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: seanchatmangpt/lsp-max
+          ref: 7bcc1e16dec71ef5fb2cedea2dfd6cb5cde37f59
+          path: .tooling/lsp-max
+
+      - name: Checkout pinned lsp-types-max dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: seanchatmangpt/lsp-types-max
+          ref: 6773e6017ca83c565785d0ec39d75304f62c3237
+          path: .tooling/lsp-types-max
+
+      - name: Checkout pinned wasm4pm dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: seanchatmangpt/wasm4pm
+          ref: 0bb134b29245517ac4969a9f1916f5432931c5d0
+          path: .tooling/wasm4pm
+
+      - name: Checkout pinned wasm4pm-compat dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: seanchatmangpt/wasm4pm-compat
+          ref: e46155e209a750fda0218532d96ae17a9e10903e
+          path: .tooling/wasm4pm-compat
+
+      - name: Install pinned ggen nightly
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b
+        with:
+          toolchain: nightly-2026-06-22
+          components: rustfmt,clippy
+
+      - name: Install ggen rustc wrapper
+        uses: taiki-e/install-action@81ecf985428d5c2ea81dbf079bceca32bc9604ab
+        with:
+          tool: sccache
+
+      - name: Build real ggen actuator
+        working-directory: .tooling/ggen
+        run: cargo build -p ggen-cli-lib --bin ggen
+
+      - name: Set up AshR2RML-compatible BEAM
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.2.4"
+
+      - name: Manufacture public-ontology projection twice
+        working-directory: paas
+        run: |
+          set -euo pipefail
+          ../.tooling/ggen/target/debug/ggen sync run
+          first="$(sha256sum lib/aries_paas/generated/capability_catalog.ex | cut -d' ' -f1)"
+          ../.tooling/ggen/target/debug/ggen sync run
+          second="$(sha256sum lib/aries_paas/generated/capability_catalog.ex | cut -d' ' -f1)"
+          test "$first" = "$second"
+          ../.tooling/ggen/target/debug/ggen receipt verify
+
+      - name: Resolve PaaS dependencies
+        working-directory: paas
+        run: mix deps.get
+
+      - name: Compile PaaS with warnings as errors
+        working-directory: paas
+        run: mix compile --force --warnings-as-errors
+
+      - name: Execute exact ARIES PaaS crown
+        working-directory: paas
+        run: mix test --trace
+
+      - name: Publish receipt DAG
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aries-paas-receipts-${{ github.sha }}
+          path: |
+            paas/tmp/aries_paas_receipt.json
+            paas/.ggen/receipts/**
+          if-no-files-found: warn
