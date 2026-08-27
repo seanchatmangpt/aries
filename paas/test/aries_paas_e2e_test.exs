@@ -37,7 +37,7 @@ defmodule AriesPaaSE2ETest do
     assert AriesPaaS.Generated.CapabilityCatalog.fetch("authorize").phase == "SELECT"
   end
 
-  test "exact admitted Gripper subject reaches ARIES and returns a verified receipt" do
+  test "exact admitted Gripper subject reaches ARIES and persists a verified Ash receipt chain" do
     assert File.regular?(@aries_binary)
 
     assert {:ok, result} =
@@ -54,6 +54,14 @@ defmodule AriesPaaSE2ETest do
     assert result.receipt.standing == "ALIVE"
     assert result.receipt.plan_sha256 == AriesPaaS.Solver.sha256(result.plan)
     assert is_binary(result.receipt.semantic_r2rml_sha256)
+
+    assert result.planning_request.authority == "execute"
+    assert result.plan_run.request_id == result.planning_request.id
+    assert result.plan_receipt.run_id == result.plan_run.id
+    assert result.plan_receipt.receipt_id == result.receipt.receipt_id
+
+    assert result.plan_receipt.semantic_r2rml_sha256 ==
+             result.receipt.semantic_r2rml_sha256
 
     File.mkdir_p!("tmp")
 

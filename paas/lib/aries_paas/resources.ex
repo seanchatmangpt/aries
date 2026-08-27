@@ -152,6 +152,7 @@ defmodule AriesPaaS.PlanReceipt do
         :command_sha256,
         :plan_sha256,
         :stdout_sha256,
+        :semantic_r2rml_sha256,
         :receipt_id,
         :standing
       ]
@@ -167,6 +168,7 @@ defmodule AriesPaaS.PlanReceipt do
     attribute :command_sha256, :string, allow_nil?: false, public?: true
     attribute :plan_sha256, :string, allow_nil?: true, public?: true
     attribute :stdout_sha256, :string, allow_nil?: false, public?: true
+    attribute :semantic_r2rml_sha256, :string, allow_nil?: false, public?: true
     attribute :receipt_id, :string, allow_nil?: false, public?: true
     attribute :standing, :string, allow_nil?: false, public?: true
   end

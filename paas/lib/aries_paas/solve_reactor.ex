@@ -8,10 +8,24 @@ defmodule AriesPaaS.Steps.Admit do
          {:ok, problem_path} <- fetch_path(request, :problem_path),
          :ok <- regular_file(domain_path, :domain_path),
          :ok <- regular_file(problem_path, :problem_path) do
-      {:ok,
-       request
-       |> Map.put(:domain_path, Path.expand(domain_path))
-       |> Map.put(:problem_path, Path.expand(problem_path))}
+      normalized =
+        request
+        |> Map.put(:domain_path, Path.expand(domain_path))
+        |> Map.put(:problem_path, Path.expand(problem_path))
+
+      attrs = %{
+        domain_path: normalized.domain_path,
+        problem_path: normalized.problem_path,
+        authority: authority_for_storage(Map.get(normalized, :authority))
+      }
+
+      case Ash.create(Ash.Changeset.for_create(AriesPaaS.PlanningRequest, :create, attrs)) do
+        {:ok, planning_request} ->
+          {:ok, %{request: normalized, planning_request: planning_request}}
+
+        {:error, reason} ->
+          {:error, refusal(:ash_request_admission_failed, %{reason: inspect(reason)})}
+      end
     end
   end
 
@@ -30,6 +44,11 @@ defmodule AriesPaaS.Steps.Admit do
     end
   end
 
+  defp authority_for_storage(value) when is_atom(value), do: Atom.to_string(value)
+  defp authority_for_storage(value) when is_binary(value), do: value
+  defp authority_for_storage(nil), do: nil
+  defp authority_for_storage(value), do: inspect(value)
+
   defp refusal(type, details) do
     %AriesPaaS.Refusal{
       type: type,
@@ -44,14 +63,10 @@ defmodule AriesPaaS.Steps.SemanticAdmission do
   use Reactor.Step
 
   @impl Reactor.Step
-  def run(%{request: request}, _context, _options) do
+  def run(%{admitted: admitted}, _context, _options) do
     case AriesPaaS.semantic_r2rml() do
       {:ok, turtle} when is_binary(turtle) ->
-        {:ok,
-         %{
-           request: request,
-           semantic_r2rml_sha256: AriesPaaS.Solver.sha256(turtle)
-         }}
+        {:ok, Map.put(admitted, :semantic_r2rml_sha256, AriesPaaS.Solver.sha256(turtle))}
 
       {:error, reason} ->
         {:error,
@@ -91,27 +106,88 @@ defmodule AriesPaaS.Steps.Actuate do
 
   @impl Reactor.Step
   def run(
-        %{authorized: %{request: request, semantic_r2rml_sha256: semantic_sha}},
+        %{
+          authorized: %{
+            request: request,
+            planning_request: planning_request,
+            semantic_r2rml_sha256: semantic_sha
+          }
+        },
         _context,
         _options
       ) do
     case AriesPaaS.Solver.solve(request) do
       {:ok, result} ->
-        {:ok, attach_semantic_receipt(result, semantic_sha)}
+        {:ok, attach_context(result, planning_request, semantic_sha)}
 
       {:error, %{receipt: _receipt, result: result} = error} ->
-        {:error,
-         error
-         |> Map.put(:result, attach_semantic_receipt(result, semantic_sha))
-         |> Map.update!(:receipt, &Map.put(&1, :semantic_r2rml_sha256, semantic_sha))}
+        {:ok,
+         result
+         |> attach_context(planning_request, semantic_sha)
+         |> Map.put(:solver_error, Map.drop(error, [:result, :receipt]))}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp attach_semantic_receipt(result, semantic_sha) do
-    put_in(result, [:receipt, :semantic_r2rml_sha256], semantic_sha)
+  defp attach_context(result, planning_request, semantic_sha) do
+    result
+    |> put_in([:receipt, :semantic_r2rml_sha256], semantic_sha)
+    |> Map.put(:planning_request, planning_request)
+  end
+end
+
+defmodule AriesPaaS.Steps.PersistEvidence do
+  @moduledoc false
+  use Reactor.Step
+
+  @impl Reactor.Step
+  def run(%{result: result}, _context, _options) do
+    receipt = result.receipt
+
+    run_attrs = %{
+      request_id: result.planning_request.id,
+      started_at: result.started_at,
+      ended_at: result.ended_at,
+      exit_code: result.exit_code,
+      plan_text: result.plan,
+      stdout: result.stdout
+    }
+
+    with {:ok, plan_run} <-
+           Ash.create(Ash.Changeset.for_create(AriesPaaS.PlanRun, :create, run_attrs)),
+         {:ok, plan_receipt} <- create_receipt(plan_run, result, receipt) do
+      {:ok,
+       result
+       |> Map.put(:plan_run, plan_run)
+       |> Map.put(:plan_receipt, plan_receipt)}
+    else
+      {:error, reason} ->
+        {:error,
+         %AriesPaaS.Refusal{
+           type: :ash_evidence_persistence_failed,
+           message: "REFUSED: observed ARIES consequence could not be persisted through Ash",
+           details: %{reason: inspect(reason), receipt_id: receipt.receipt_id}
+         }}
+    end
+  end
+
+  defp create_receipt(plan_run, result, receipt) do
+    attrs = %{
+      run_id: plan_run.id,
+      generated_at: result.ended_at,
+      domain_sha256: receipt.domain_sha256,
+      problem_sha256: receipt.problem_sha256,
+      command_sha256: receipt.command_sha256,
+      plan_sha256: receipt.plan_sha256,
+      stdout_sha256: receipt.stdout_sha256,
+      semantic_r2rml_sha256: receipt.semantic_r2rml_sha256,
+      receipt_id: receipt.receipt_id,
+      standing: receipt.standing
+    }
+
+    Ash.create(Ash.Changeset.for_create(AriesPaaS.PlanReceipt, :create, attrs))
   end
 end
 
@@ -125,24 +201,37 @@ defmodule AriesPaaS.Steps.VerifyReceipt do
 
     cond do
       receipt.plan_sha256 != expected_plan_sha ->
-        {:error, receipt_refusal(:plan_hash_mismatch)}
+        {:error, receipt_refusal(:plan_hash_mismatch, receipt)}
 
       not is_binary(receipt.semantic_r2rml_sha256) ->
-        {:error, receipt_refusal(:missing_semantic_mapping_identity)}
+        {:error, receipt_refusal(:missing_semantic_mapping_identity, receipt)}
+
+      result.plan_receipt.receipt_id != receipt.receipt_id ->
+        {:error, receipt_refusal(:ash_receipt_identity_mismatch, receipt)}
+
+      result.plan_receipt.run_id != result.plan_run.id ->
+        {:error, receipt_refusal(:ash_receipt_run_mismatch, receipt)}
+
+      result.plan_run.request_id != result.planning_request.id ->
+        {:error, receipt_refusal(:ash_run_request_mismatch, receipt)}
 
       receipt.exit_code != 0 ->
-        {:error, receipt_refusal(:nonzero_exit_cannot_receive_alive_standing)}
+        {:error, receipt_refusal(:aries_nonzero_exit, receipt)}
 
       true ->
         {:ok, result}
     end
   end
 
-  defp receipt_refusal(reason) do
+  defp receipt_refusal(reason, receipt) do
     %AriesPaaS.Refusal{
       type: :receipt_verification_failed,
-      message: "REFUSED: execution receipt did not verify",
-      details: %{reason: reason}
+      message: "REFUSED: execution receipt did not verify as an ALIVE consequence",
+      details: %{
+        reason: reason,
+        receipt_id: receipt.receipt_id,
+        observed_standing: receipt.standing
+      }
     }
   end
 end
@@ -151,9 +240,11 @@ defmodule AriesPaaS.SolveReactor do
   @moduledoc """
   BRCE-aligned planning reactor.
 
-  `admit` and `semantic_admission` are SELECT/CONSTRUCT only. `authorize`
-  manufactures explicit DO authority. `actuate` is the only solver execution
-  edge, and `verify_receipt` refuses any unbound consequence.
+  `admit` persists the intent through Ash. `semantic_admission` compiles and
+  verifies the AshR2RML semantic closure. `authorize` manufactures explicit DO
+  authority. `actuate` is the only solver execution edge. `persist_evidence`
+  records the observed run and receipt through Ash before `verify_receipt`
+  decides standing.
   """
 
   use Reactor
@@ -165,7 +256,7 @@ defmodule AriesPaaS.SolveReactor do
   end
 
   step :semantic_admission, AriesPaaS.Steps.SemanticAdmission do
-    argument :request, result(:admit)
+    argument :admitted, result(:admit)
   end
 
   step :authorize, AriesPaaS.Steps.Authorize do
@@ -177,8 +268,12 @@ defmodule AriesPaaS.SolveReactor do
     max_retries 0
   end
 
-  step :verify_receipt, AriesPaaS.Steps.VerifyReceipt do
+  step :persist_evidence, AriesPaaS.Steps.PersistEvidence do
     argument :result, result(:actuate)
+  end
+
+  step :verify_receipt, AriesPaaS.Steps.VerifyReceipt do
+    argument :result, result(:persist_evidence)
   end
 
   return :verify_receipt
