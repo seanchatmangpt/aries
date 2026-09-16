@@ -522,6 +522,7 @@ pub fn parse_constraint_item(
         IntNe::NAME => IntNe::try_from_item(c, m)?.into(),
         IntNeReif::NAME => IntNeReif::try_from_item(c, m)?.into(),
         IntTimes::NAME => IntTimes::try_from_item(c, m)?.into(),
+        SetIn::NAME => SetIn::try_from_item(c, m)?.into(),
         _ => anyhow::bail!(format!("unknown constraint '{}'", c.id)),
     };
     m.add_constraint(constraint);

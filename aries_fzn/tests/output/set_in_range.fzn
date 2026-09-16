@@ -1,0 +1,3 @@
+var 0..4: x:: output_var;
+constraint set_in(x, 2..3);
+solve satisfy;
