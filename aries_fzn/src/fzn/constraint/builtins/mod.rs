@@ -42,6 +42,7 @@ mod int_lt_reif;
 mod int_ne;
 mod int_ne_reif;
 mod int_times;
+mod set_in;
 
 pub use array_bool_and::ArrayBoolAnd;
 pub use array_bool_element::ArrayBoolElement;
@@ -82,3 +83,4 @@ pub use int_lt_reif::IntLtReif;
 pub use int_ne::IntNe;
 pub use int_ne_reif::IntNeReif;
 pub use int_times::IntTimes;
+pub use set_in::SetIn;
